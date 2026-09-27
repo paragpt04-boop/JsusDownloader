@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="jsus_bg">#FF0A0E1A</color>
+    <color name="jsus_cyan">#FF00D4FF</color>
+
+    <style name="Theme.Jsus" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/jsus_bg</item>
+        <item name="android:colorAccent">@color/jsus_cyan</item>
+        <item name="android:statusBarColor">@color/jsus_bg</item>
+        <item name="android:navigationBarColor">@color/jsus_bg</item>
+    </style>
+</resources>
