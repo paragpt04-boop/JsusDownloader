@@ -42,20 +42,23 @@ object Saver {
         context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission }
     } catch (_: Exception) { false }
 
-    suspend fun save(context: Context, files: List<File>, root: File, tree: String?): List<OutFile> {
+    /** Archivo a guardar: [relDir] = subcarpeta dentro del destino, [name] = nombre final con extensión. */
+    data class SaveItem(val file: File, val relDir: String, val name: String)
+
+    suspend fun save(context: Context, items: List<SaveItem>, tree: String?): List<OutFile> {
         val out = mutableListOf<OutFile>()
-        for (f in files) {
-            val rel = f.parentFile?.relativeTo(root)?.path?.trim('/', '\\') ?: ""
+        for (it in items) {
+            val rel = it.relDir.trim('/', '\\')
             out += when {
-                !tree.isNullOrBlank() -> saveToTree(context, f, rel, tree)
-                Build.VERSION.SDK_INT >= 29 -> saveToMediaStore(context, f, rel)
-                else -> saveLegacy(context, f, rel)
+                !tree.isNullOrBlank() -> saveToTree(context, it.file, rel, tree, it.name)
+                Build.VERSION.SDK_INT >= 29 -> saveToMediaStore(context, it.file, rel, it.name)
+                else -> saveLegacy(context, it.file, rel, it.name)
             }
         }
         return out
     }
 
-    private fun saveToTree(context: Context, f: File, rel: String, tree: String): OutFile {
+    private fun saveToTree(context: Context, f: File, rel: String, tree: String, wanted: String): OutFile {
         val base = DocumentFile.fromTreeUri(context, Uri.parse(tree))
             ?: throw Exception("No tengo acceso a la carpeta elegida. Elígela de nuevo en Ajustes.")
         var dir: DocumentFile = base
@@ -65,7 +68,7 @@ object Saver {
                     ?: throw Exception("No se pudo crear la carpeta \"$seg\"")
             }
         }
-        val name = uniqueName(f.name) { dir.findFile(it) != null }
+        val name = uniqueName(wanted) { dir.findFile(it) != null }
         val mime = mimeFor(name)
         val doc = dir.createFile(mime, name) ?: throw Exception("No se pudo crear el archivo en la carpeta elegida.")
         context.contentResolver.openOutputStream(doc.uri)?.use { os -> f.inputStream().use { it.copyTo(os, 256 * 1024) } }
@@ -73,11 +76,11 @@ object Saver {
         return OutFile(doc.name ?: name, doc.uri.toString(), mime)
     }
 
-    private fun saveToMediaStore(context: Context, f: File, rel: String): OutFile {
-        val mime = mimeFor(f.name)
+    private fun saveToMediaStore(context: Context, f: File, rel: String, wanted: String): OutFile {
+        val mime = mimeFor(wanted)
         val relPath = Environment.DIRECTORY_DOWNLOADS + "/" + DEFAULT_FOLDER + if (rel.isNotEmpty()) "/$rel" else ""
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, wanted)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
             put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
@@ -94,20 +97,20 @@ object Saver {
             try { resolver.delete(uri, null, null) } catch (_: Exception) {}
             throw e
         }
-        var finalName = f.name
+        var finalName = wanted
         try {
             resolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-                if (c.moveToFirst()) finalName = c.getString(0) ?: f.name
+                if (c.moveToFirst()) finalName = c.getString(0) ?: wanted
             }
         } catch (_: Exception) {}
         return OutFile(finalName, uri.toString(), mime)
     }
 
     @Suppress("DEPRECATION")
-    private suspend fun saveLegacy(context: Context, f: File, rel: String): OutFile {
+    private suspend fun saveLegacy(context: Context, f: File, rel: String, wanted: String): OutFile {
         val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), DEFAULT_FOLDER + if (rel.isNotEmpty()) "/$rel" else "")
         dir.mkdirs()
-        val name = uniqueName(f.name) { File(dir, it).exists() }
+        val name = uniqueName(wanted) { File(dir, it).exists() }
         val dest = File(dir, name)
         f.copyTo(dest, overwrite = false)
         val mime = mimeFor(name)

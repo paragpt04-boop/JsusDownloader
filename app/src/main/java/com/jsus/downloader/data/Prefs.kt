@@ -51,6 +51,16 @@ object Prefs {
     var playlistSubfolder: Boolean by Bool("playlistSubfolder", true)
     var destTreeUri: String by Str("destTreeUri", "")            // vacío = Descargas/JSUS Downloader
     var askEachTime: Boolean by Bool("askEachTime", false)
+    var askName: Boolean by Bool("askName", true)                // preguntar nombre y carpeta al descargar
+    var recentFolders: String by Str("recentFolders", "")       // últimas subcarpetas usadas, separadas por \n
+    var reelFit: String by Str("reelFit", "crop")               // crop | blur
+
+    fun recentFolderList(): List<String> = recentFolders.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+
+    fun addRecentFolder(f: String) {
+        if (f.isBlank()) return
+        recentFolders = (listOf(f) + recentFolderList().filterNot { it.equals(f, ignoreCase = true) }).take(8).joinToString("\n")
+    }
 
     // Red
     var speedLimit: String by Str("speedLimit", "")              // "" = sin límite, ej. 2M

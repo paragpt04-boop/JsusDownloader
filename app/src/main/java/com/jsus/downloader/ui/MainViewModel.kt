@@ -97,8 +97,26 @@ class MainViewModel : ViewModel() {
             embedThumbnail = Prefs.embedThumbnail,
             sponsorBlock = Prefs.sponsorBlock,
             playlist = i.kind == "playlist",
-            start = "", end = ""
+            start = "", end = "",
+            reel = false,
+            reelFit = Prefs.reelFit
         )
+    }
+
+    /** Nombre sugerido para el diálogo (según la plantilla de Ajustes). */
+    fun suggestedName(): String {
+        val i = info ?: return ""
+        val s = sel.copy(type = tab)
+        return if (s.playlist) Fmt.safeName(i.playlistTitle ?: i.title, 80)
+        else Fmt.applyTemplate(Prefs.filenameTemplate, i, s)
+    }
+
+    /** Extensión que tendrá el archivo final (para la vista previa). */
+    fun finalExt(): String = if (tab == "video") {
+        if (sel.reel) "mp4" else sel.container
+    } else when (sel.audioFormat) {
+        "original" -> "m4a/opus"
+        else -> sel.audioFormat
     }
 
     fun canDownload(): String? {
@@ -107,9 +125,15 @@ class MainViewModel : ViewModel() {
         return null
     }
 
-    fun download(context: Context, destTree: String?) {
+    fun download(context: Context, destTree: String?, name: String = "", subfolder: String = "") {
         val i = info ?: return
-        val s = sel.copy(type = tab, subtitles = tab == "video" && sel.subtitles)
+        val s = sel.copy(
+            type = tab,
+            subtitles = tab == "video" && sel.subtitles && !sel.reel,
+            reel = tab == "video" && sel.reel,
+            customName = Fmt.safeName(name.ifBlank { suggestedName() }, if (sel.playlist) 80 else 120),
+            subfolder = Fmt.safeFolder(subfolder)
+        )
         val finalUrl = if (s.playlist) url else i.webpageUrl
         val title = if (s.playlist) (i.playlistTitle ?: i.title) else i.title
         DownloadRepo.enqueue(context, finalUrl, title, i.thumbnail, s, destTree)

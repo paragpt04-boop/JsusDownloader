@@ -21,7 +21,9 @@ data class MediaInfo(
     val h264Max: Int,
     val maxAbr: Int,
     val playlistTitle: String?,
-    val playlistCount: Int
+    val playlistCount: Int,
+    val id: String = "",
+    val uploadDate: String = ""     // YYYYMMDD
 )
 
 data class DlOptions(
@@ -36,7 +38,12 @@ data class DlOptions(
     val sponsorBlock: Boolean = false,
     val playlist: Boolean = false,
     val start: String = "",
-    val end: String = ""
+    val end: String = "",
+    val customName: String = "",      // nombre elegido (sin extensión). Vacío = automático
+    val subfolder: String = "",       // carpeta / categoría dentro del destino
+    val reel: Boolean = false,        // convertir a vertical 9:16 para Reels/Shorts
+    val reelFit: String = "crop",     // crop = llenar pantalla | blur = completo con fondo desenfocado
+    val reelMpeg4: Boolean = false    // interno: codificador de respaldo si no hay H.264
 )
 
 enum class JobStatus {
@@ -127,9 +134,52 @@ object Fmt {
             "mp3", "m4a", "opus" -> "${o.audioFormat.uppercase()} · ${o.bitrate} kbps"
             else -> o.audioFormat.uppercase()
         }
+        if (o.reel && o.type == "video") l = "Reel 9:16 · MP4"
         if (o.playlist) l += " · Playlist"
         if (o.start.isNotBlank() || o.end.isNotBlank()) l += " · Recorte"
         return l
+    }
+
+    /** Nombre seguro para Android/Windows: sin caracteres prohibidos y máximo ~120 bytes. */
+    fun safeName(raw: String, maxBytes: Int = 120): String {
+        var n = raw.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim().trim('.', ' ')
+        if (n.isEmpty()) n = "descarga"
+        val sb = StringBuilder()
+        var bytes = 0
+        var i = 0
+        while (i < n.length) {
+            val cp = n.codePointAt(i)
+            val len = String(Character.toChars(cp)).toByteArray(Charsets.UTF_8).size
+            if (bytes + len > maxBytes) break
+            sb.appendCodePoint(cp)
+            bytes += len
+            i += Character.charCount(cp)
+        }
+        return sb.toString().trim().trim('.', ' ').ifEmpty { "descarga" }
+    }
+
+    /** Subcarpeta segura: hasta 3 niveles separados por "/" */
+    fun safeFolder(raw: String): String =
+        raw.split('/', '\\').map { it.trim() }.filter { it.isNotEmpty() }.take(3)
+            .joinToString("/") { safeName(it, 60) }
+
+    /** Aplica la plantilla de nombre (estilo yt-dlp) con los datos del video. */
+    fun applyTemplate(tpl: String, i: MediaInfo, o: DlOptions): String {
+        val date = if (i.uploadDate.length == 8) "${i.uploadDate.substring(0, 4)}-${i.uploadDate.substring(4, 6)}-${i.uploadDate.substring(6, 8)}" else ""
+        val height = if (o.quality == "best") (i.qualities.firstOrNull()?.height?.toString() ?: "") else o.quality
+        val out = tpl
+            .replace(Regex("""%\(upload_date>[^)]*\)s"""), date)
+            .replace("%(title)s", i.title)
+            .replace("%(uploader)s", i.uploader)
+            .replace("%(channel)s", i.uploader)
+            .replace("%(id)s", i.id)
+            .replace("%(height)s", height)
+            .replace(Regex("""%\([^)]*\)[a-z0-9]*"""), "")
+            .replace(Regex("""\s*-\s*-\s*"""), " - ")
+            .trim().trim('-', ' ', '[', ']').trim()
+        return safeName(out.ifBlank { i.title })
     }
 
     val TIME_RE = Regex("""^\d{1,3}(:\d{1,2}){0,2}(\.\d+)?$""")

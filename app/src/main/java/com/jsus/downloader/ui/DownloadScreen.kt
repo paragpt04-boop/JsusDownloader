@@ -25,7 +25,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -86,6 +90,9 @@ fun DownloadScreen(vm: MainViewModel) {
     var destTree by remember { mutableStateOf(currentTree(ctx)) }
     var pendingAskDownload by remember { mutableStateOf(false) }
     var moreOpen by remember { mutableStateOf(false) }
+    var showNameDialog by remember { mutableStateOf(false) }
+    var pendingName by remember { mutableStateOf("") }
+    var pendingSub by remember { mutableStateOf("") }
 
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -94,7 +101,7 @@ fun DownloadScreen(vm: MainViewModel) {
             } catch (_: Exception) {
             }
             if (pendingAskDownload) {
-                vm.download(ctx, uri.toString())
+                vm.download(ctx, uri.toString(), pendingName, pendingSub)
             } else {
                 Prefs.destTreeUri = uri.toString()
                 destTree = uri.toString()
@@ -104,19 +111,34 @@ fun DownloadScreen(vm: MainViewModel) {
     }
 
     val legacyPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) vm.download(ctx, destTree) else vm.error = "Sin permiso de almacenamiento no puedo guardar en Descargas."
+        if (granted) vm.download(ctx, destTree, pendingName, pendingSub) else vm.error = "Sin permiso de almacenamiento no puedo guardar en Descargas."
     }
 
-    fun startDownload() {
-        vm.canDownload()?.let { vm.error = it; return }
-        vm.error = null
+    fun proceed(name: String, sub: String) {
+        pendingName = name
+        pendingSub = sub
         when {
             vm.askFolder -> { pendingAskDownload = true; treeLauncher.launch(null) }
             destTree == null && Build.VERSION.SDK_INT < 29 &&
                 ContextCompat.checkSelfPermission(ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED ->
                 legacyPerm.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            else -> vm.download(ctx, destTree)
+            else -> vm.download(ctx, destTree, name, sub)
         }
+    }
+
+    fun startDownload() {
+        vm.canDownload()?.let { vm.error = it; return }
+        vm.error = null
+        if (Prefs.askName) showNameDialog = true else proceed("", "")
+    }
+
+    if (showNameDialog) {
+        NameDialog(
+            vm = vm,
+            destLabel = if (vm.askFolder) "(carpeta que elijas)" else Saver.treeLabel(ctx, destTree),
+            onDismiss = { showNameDialog = false },
+            onConfirm = { name, sub -> showNameDialog = false; proceed(name, sub) }
+        )
     }
 
     LaunchedEffect(vm.toast) {
@@ -336,6 +358,28 @@ private fun ResultSection(
             }
             vm.sel = s.copy(h264 = on, quality = q)
         }
+        ToggleRow(
+            "📱 Modo Reel / Short (9:16)", checked = s.reel,
+            sub = "Vertical 1080x1920 · MP4 H.264 · listo para subir"
+        ) { vm.sel = s.copy(reel = it) }
+        if (s.reel) {
+            Spacer(Modifier.height(4.dp))
+            Segmented(
+                listOf("crop" to "Llenar pantalla", "blur" to "Completo + fondo"),
+                s.reelFit
+            ) { vm.sel = s.copy(reelFit = it); Prefs.reelFit = it }
+            Text(
+                if (s.reelFit == "blur") "Se ve el video entero, con el fondo desenfocado arriba y abajo."
+                else "Recorta los lados para llenar la pantalla vertical (centrado).",
+                color = JC.Text3, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp)
+            )
+            if (info.duration > 180 && s.start.isBlank() && s.end.isBlank()) {
+                Text(
+                    "⚠ Los Shorts duran máximo 3 min. Usa Más opciones → Recortar. Convertir videos largos en el celular tarda bastante.",
+                    color = JC.Warn, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
     } else {
         SectionLabel("Formato")
         ChipGrid(AUDIO_FORMATS, 3) { (v, t, sub), mod ->
@@ -363,8 +407,8 @@ private fun ResultSection(
             }
             if (moreOpen) {
                 Spacer(Modifier.height(6.dp))
-                ToggleRow("Subtítulos", checked = s.subtitles && isVideo, enabled = isVideo, sub = "Idiomas: ${Prefs.subLangs}") { vm.sel = s.copy(subtitles = it) }
-                val thumbOk = if (isVideo) s.container != "webm" else s.audioFormat != "wav"
+                ToggleRow("Subtítulos", checked = s.subtitles && isVideo && !s.reel, enabled = isVideo && !s.reel, sub = "Idiomas: ${Prefs.subLangs}") { vm.sel = s.copy(subtitles = it) }
+                val thumbOk = if (isVideo) s.container != "webm" && !s.reel else s.audioFormat != "wav"
                 ToggleRow("Portada (miniatura)", checked = s.embedThumbnail && thumbOk, enabled = thumbOk) { vm.sel = s.copy(embedThumbnail = it) }
                 ToggleRow("Quitar patrocinios", checked = s.sponsorBlock, sub = "SponsorBlock") { vm.sel = s.copy(sponsorBlock = it) }
                 if (!s.playlist) {
@@ -402,7 +446,9 @@ private fun ResultSection(
 
     // Botón
     Spacer(Modifier.height(14.dp))
-    val baseText = if (isVideo) {
+    val baseText = if (isVideo && s.reel) {
+        "Descargar como Reel 9:16"
+    } else if (isVideo) {
         val q = if (s.quality == "best") "máxima calidad" else Fmt.resLabel(s.quality.toIntOrNull() ?: 0)
         "Descargar video $q · ${s.container.uppercase()}"
     } else {
@@ -500,10 +546,103 @@ fun JobCard(j: DlJob, ctx: Context) {
                             SmallButton("▶ Abrir", color = JC.Cyan) { Actions.openFile(ctx, single) }
                             SmallButton("↗ Compartir") { Actions.shareFile(ctx, single) }
                         }
+                        if (j.status == JobStatus.ERROR || j.status == JobStatus.CANCELED) {
+                            SmallButton("↻ Reintentar", color = JC.Cyan, border = JC.Cyan.copy(alpha = 0.4f)) { DownloadRepo.retry(ctx, j.id) }
+                        }
                         SmallButton("Quitar") { DownloadRepo.remove(j.id) }
                     }
                 }
             }
         }
     }
+}
+
+
+/** Diálogo para elegir el nombre del archivo y la carpeta/categoría antes de descargar. */
+@Composable
+private fun NameDialog(vm: MainViewModel, destLabel: String, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
+    val suggested = remember { vm.suggestedName() }
+    var name by remember { mutableStateOf(suggested) }
+    var sub by remember { mutableStateOf("") }
+    var dontAsk by remember { mutableStateOf(false) }
+    val recent = remember { Prefs.recentFolderList() }
+    val playlist = vm.sel.playlist
+    val ext = vm.finalExt()
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = JC.Cyan, unfocusedBorderColor = JC.Line,
+        focusedContainerColor = JC.Bg3, unfocusedContainerColor = JC.Bg3,
+        focusedTextColor = JC.Text, unfocusedTextColor = JC.Text, cursorColor = JC.Cyan,
+        focusedLabelColor = JC.Cyan, unfocusedLabelColor = JC.Text2
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = JC.Bg2,
+        title = { Text(if (playlist) "Nombre de la carpeta" else "Nombre del archivo", color = JC.Text) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(if (playlist) "Carpeta de la playlist" else "Nombre") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = fieldColors,
+                    trailingIcon = {
+                        Text("↺", color = JC.Text2, fontSize = 18.sp, modifier = Modifier.clickable { name = suggested }.padding(8.dp))
+                    }
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = sub,
+                    onValueChange = { sub = it },
+                    label = { Text("Carpeta / categoría (opcional)") },
+                    placeholder = { Text("Ej: Reels/MikroTik", color = JC.Text3) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = fieldColors
+                )
+                if (recent.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Usadas antes:", color = JC.Text3, fontSize = 11.sp)
+                    Spacer(Modifier.height(4.dp))
+                    ChipGrid(recent, 2) { f, mod ->
+                        Box(
+                            mod.clip(RoundedCornerShape(16.dp))
+                                .background(if (sub == f) JC.Cyan.copy(alpha = 0.15f) else JC.Bg3)
+                                .border(1.dp, if (sub == f) JC.Cyan else JC.Line, RoundedCornerShape(16.dp))
+                                .clickable { sub = if (sub == f) "" else f }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) { Text("📁 $f", color = JC.Text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                val finalName = Fmt.safeName(name.ifBlank { suggested }, if (playlist) 80 else 120)
+                val folder = Fmt.safeFolder(sub)
+                val path = listOf(destLabel, folder).filter { it.isNotBlank() }.joinToString("/")
+                Text("Se guardará en:", color = JC.Text3, fontSize = 11.sp)
+                Text(
+                    if (playlist) "$path/$finalName/001 - …" else "$path/$finalName.$ext",
+                    color = JC.Cyan, fontSize = 12.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    Modifier.fillMaxWidth().clickable { dontAsk = !dontAsk }.padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(checked = dontAsk, onCheckedChange = { dontAsk = it }, colors = CheckboxDefaults.colors(checkedColor = JC.Cyan))
+                    Text("No volver a preguntar (se cambia en Ajustes)", color = JC.Text2, fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (dontAsk) Prefs.askName = false
+                onConfirm(name, sub)
+            }) { Text("⬇ Descargar", color = JC.Cyan, fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar", color = JC.Text2) } }
+    )
 }

@@ -93,6 +93,7 @@ fun SettingsScreen() {
                 }
                 SmallButton("Elegir", color = JC.Cyan, border = JC.Cyan.copy(alpha = 0.4f)) { treeLauncher.launch(null) }
             }
+            ToggleRow("Preguntar nombre y carpeta al descargar", Prefs.askName, sub = "Para organizar tus archivos (Reels, temas, etc.)") { Prefs.askName = it; bump() }
             ToggleRow("Preguntar dónde guardar cada vez", Prefs.askEachTime) { Prefs.askEachTime = it; bump() }
             ToggleRow("Playlists en su propia carpeta", Prefs.playlistSubfolder, sub = "Numeradas 001, 002…") { Prefs.playlistSubfolder = it; bump() }
         }
@@ -111,6 +112,11 @@ fun SettingsScreen() {
             ) { Prefs.videoContainer = it; bump() }
             ToggleRow("Compatibilidad máxima H.264", Prefs.h264, sub = "Para TV y celulares viejos · hasta 1080p") { Prefs.h264 = it; bump() }
             ToggleRow("Incrustar capítulos", Prefs.embedChapters) { Prefs.embedChapters = it; bump() }
+            SelectRow(
+                "Encuadre del modo Reel",
+                listOf("crop" to "Llenar pantalla", "blur" to "Completo + fondo desenfocado"),
+                Prefs.reelFit
+            ) { Prefs.reelFit = it; bump() }
         }
 
         // Audio
@@ -149,7 +155,7 @@ fun SettingsScreen() {
                 "%(title)s [%(id)s]" to "Título [ID]",
                 "%(upload_date>%Y-%m-%d)s - %(title)s" to "Fecha - Título"
             )
-            SelectRow("Plantilla", presets, Prefs.filenameTemplate) { Prefs.filenameTemplate = it; bump() }
+            SelectRow("Nombre automático", presets, Prefs.filenameTemplate, sub = "El que sale sugerido al descargar") { Prefs.filenameTemplate = it; bump() }
         }
 
         // Red

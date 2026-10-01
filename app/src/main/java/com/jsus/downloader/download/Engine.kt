@@ -21,6 +21,9 @@ object Engine {
 
     private val LOSSY = setOf("mp3", "m4a", "opus")
 
+    /** Nombre base de los archivos temporales de un video suelto */
+    const val TMP_BASE = "media"
+
     private fun JSONObject.s(key: String, def: String = ""): String = if (isNull(key)) def else optString(key, def)
 
     // ─────────────── Info ───────────────
@@ -124,7 +127,9 @@ object Engine {
             h264Max = if (h264Max > 0) h264Max else 1080,
             maxAbr = bestAbr.toInt(),
             playlistTitle = plTitle,
-            playlistCount = plCount
+            playlistCount = plCount,
+            id = info.s("id"),
+            uploadDate = info.s("upload_date")
         )
     }
 
@@ -135,16 +140,34 @@ object Engine {
         r.addOption("--newline")
         r.addOption("--no-mtime")
         r.addOption("--windows-filenames")
-        r.addOption("--trim-filenames", "150")
         r.addOption(if (o.playlist) "--yes-playlist" else "--no-playlist")
         if (o.playlist) r.addOption("--ignore-errors")
 
-        val tpl = Prefs.filenameTemplate.ifBlank { "%(title)s" }
-        val prefix = if (o.playlist && Prefs.playlistSubfolder) "%(playlist_title|Playlist)s/%(playlist_index)03d - " else ""
-        r.addOption("-P", tmp.absolutePath)
-        r.addOption("-o", "$prefix$tpl.%(ext)s")
+        // Conexión más resistente: reintentos y descarga por partes (evita que YouTube frene)
+        r.addOption("--retries", "10")
+        r.addOption("--fragment-retries", "10")
+        r.addOption("--socket-timeout", "30")
+        r.addOption("--http-chunk-size", "10M")
 
-        if (o.type == "video") {
+        // Nombre temporal seguro; el nombre final lo pone la app al guardar
+        r.addOption("-P", tmp.absolutePath)
+        if (o.playlist) r.addOption("-o", "%(playlist_index)03d - %(title).80B.%(ext)s")
+        else r.addOption("-o", "$TMP_BASE.%(ext)s")
+
+        if (o.type == "video" && o.reel) {
+            // ── Modo Reel / Short: vertical 1080x1920, H.264 + AAC ──
+            r.addOption("-f", "bv*+ba/b")
+            r.addOption("-S", "res:1080,fps")
+            r.addOption("--merge-output-format", "mkv")   // mkv -> mp4 obliga a convertir
+            r.addOption("--recode-video", "mp4")
+            val vf = if (o.reelFit == "blur")
+                "split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[b]scale=1080:1920:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
+            else
+                "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1"
+            val codec = if (o.reelMpeg4) "-c:v mpeg4 -q:v 2" else "-c:v libx264 -preset veryfast -crf 21 -pix_fmt yuv420p"
+            r.addOption("--postprocessor-args", "VideoConvertor:-vf $vf $codec -c:a aac -b:a 192k -movflags +faststart")
+            if (Prefs.embedMetadata) r.addOption("--embed-metadata")
+        } else if (o.type == "video") {
             val sort = mutableListOf<String>()
             if (o.h264) sort.add("vcodec:h264")
             sort.add(if (o.quality == "best") "res" else "res:${o.quality}")
@@ -185,7 +208,7 @@ object Engine {
             }
         }
 
-        if (Prefs.embedMetadata) r.addOption("--embed-metadata")
+        if (Prefs.embedMetadata && !(o.type == "video" && o.reel)) r.addOption("--embed-metadata")
         if (o.sponsorBlock) r.addOption("--sponsorblock-remove", "sponsor,selfpromo,interaction")
         val limit = Prefs.speedLimit.trim()
         if (limit.matches(Regex("""^\d+(\.\d+)?[KMG]?$""", RegexOption.IGNORE_CASE))) r.addOption("-r", limit)
